@@ -1,224 +1,135 @@
 #!/bin/bash
 
-clear
-
-GREEN='\033[0;32m'
-RED='\033[0;31m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-line() {
-    echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-}
-
-title() {
-    line
-    echo -e "${CYAN}$1${NC}"
-    line
-}
-
-spinner() {
-    local pid=$1
-    local spin='-\|/'
-    local i=0
-
-    while kill -0 $pid 2>/dev/null; do
-        i=$(( (i+1) %4 ))
-        printf "\r${YELLOW}Scanning... ${spin:$i:1}${NC}"
-        sleep 0.1
-    done
-
-    printf "\r"
-}
-
-(
-sleep 2
-) &
-spinner $!
-
-title "SERVER DETECTOR"
-
-HOSTNAME=$(hostname)
-KERNEL=$(uname -r)
-ARCH=$(uname -m)
-
-echo -e "${GREEN}Hostname:${NC} $HOSTNAME"
-echo -e "${GREEN}Kernel:${NC}   $KERNEL"
-echo -e "${GREEN}Arch:${NC}     $ARCH"
+echo "========================================="
+echo "     Server Type Detection v1.0"
+echo "========================================="
 echo
 
-VIRT_TYPE=""
-SERVER_TYPE=""
-DETAILS=""
+SERVER_TYPE="Unknown"
+SCORE=0
 
-#########################################
-# CONTAINER DETECTION
-#########################################
-
-if grep -qa docker /proc/1/cgroup 2>/dev/null || [ -f /.dockerenv ]; then
-    VIRT_TYPE="Docker"
-    SERVER_TYPE="CONTAINER"
+# -----------------------------
+# Container Detection
+# -----------------------------
+if [ -f /.dockerenv ]; then
+    echo "[+] Docker environment detected"
+    SERVER_TYPE="Container"
 fi
 
-if grep -qa lxc /proc/1/cgroup 2>/dev/null || [ -f /run/.containerenv ]; then
-    VIRT_TYPE="LXC/LXD"
-    SERVER_TYPE="CONTAINER"
+if grep -qaE 'docker|lxc|containerd|kubepods' /proc/1/cgroup 2>/dev/null; then
+    echo "[+] Container cgroup detected"
+    SERVER_TYPE="Container"
 fi
 
-if grep -qa kubepods /proc/1/cgroup 2>/dev/null; then
-    VIRT_TYPE="Kubernetes"
-    SERVER_TYPE="CONTAINER"
+if systemd-detect-virt --container >/dev/null 2>&1; then
+    echo "[+] Container virtualization detected"
+    SERVER_TYPE="Container"
 fi
 
-#########################################
-# SYSTEMD DETECT
-#########################################
-
-if [ -z "$VIRT_TYPE" ] && command -v systemd-detect-virt >/dev/null 2>&1; then
-    VIRT_TYPE=$(systemd-detect-virt 2>/dev/null)
+if [ "$SERVER_TYPE" = "Container" ]; then
+    echo
+    echo "Detected Type: CONTAINER"
+    exit 0
 fi
 
-#########################################
-# DMI INFO
-#########################################
+# -----------------------------
+# Virtualization Detection
+# -----------------------------
+VIRT=$(systemd-detect-virt 2>/dev/null)
 
-PRODUCT_NAME=$(cat /sys/class/dmi/id/product_name 2>/dev/null)
-SYS_VENDOR=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null)
-BOARD_NAME=$(cat /sys/class/dmi/id/board_name 2>/dev/null)
-
-#########################################
-# MACHINE TYPE
-#########################################
-
-MACHINE_TYPE="Unknown"
-
-if [ -r /sys/firmware/acpi/tables/FACP ]; then
-    strings /sys/firmware/acpi/tables/DSDT 2>/dev/null | grep -qi q35 && MACHINE_TYPE="Q35"
+if [ -n "$VIRT" ] && [ "$VIRT" != "none" ]; then
+    echo "[+] Virtualization: $VIRT"
+else
+    echo "[+] No virtualization detected"
+    echo
+    echo "Detected Type: BARE METAL"
+    exit 0
 fi
 
-if echo "$PRODUCT_NAME" | grep -qi "q35"; then
-    MACHINE_TYPE="Q35"
+# -----------------------------
+# Q35 Detection
+# -----------------------------
+Q35_FOUND=0
+
+if dmesg 2>/dev/null | grep -qi "Q35"; then
+    Q35_FOUND=1
 fi
 
-#########################################
-# HYPERVISOR
-#########################################
-
-HYPERVISOR="No"
-
-grep -qi hypervisor /proc/cpuinfo && HYPERVISOR="Yes"
-
-#########################################
-# BARE METAL
-#########################################
-
-if [ "$HYPERVISOR" = "No" ] &&
-   [ "$SERVER_TYPE" != "CONTAINER" ]; then
-
-    SERVER_TYPE="BARE METAL"
-fi
-
-#########################################
-# KVM / QEMU
-#########################################
-
-if [ "$SERVER_TYPE" != "CONTAINER" ]; then
-
-    if echo "$PRODUCT_NAME" | grep -Ei "KVM|QEMU|Virtual Machine" >/dev/null; then
-
-        CORES=$(nproc)
-
-        if [ "$MACHINE_TYPE" = "Q35" ] && [ "$CORES" -ge 2 ]; then
-            SERVER_TYPE="VDS"
-            DETAILS="Dedicated Virtual Server (Q35 Machine)"
-        else
-            SERVER_TYPE="VPS"
-            DETAILS="Shared Virtual Private Server"
-        fi
+if command -v dmidecode >/dev/null 2>&1; then
+    if dmidecode 2>/dev/null | grep -qi "Q35"; then
+        Q35_FOUND=1
     fi
 fi
 
-#########################################
-# OPENVZ
-#########################################
-
-if [ -f /proc/vz/version ]; then
-    SERVER_TYPE="CONTAINER"
-    VIRT_TYPE="OpenVZ"
+if [ "$Q35_FOUND" = "1" ]; then
+    echo "[+] Q35 machine type detected"
+    SCORE=$((SCORE+3))
+else
+    echo "[-] Q35 machine type not detected"
 fi
 
-#########################################
-# XEN
-#########################################
+# -----------------------------
+# CPU Steal Time Check
+# -----------------------------
+STEAL=$(top -bn1 | grep "Cpu(s)" | awk -F',' '{for(i=1;i<=NF;i++) if($i~/%st/) print $i}' | sed 's/[^0-9.]//g')
 
-if grep -qi xen /proc/cpuinfo 2>/dev/null; then
-    SERVER_TYPE="VPS"
-    VIRT_TYPE="XEN"
+if [ -n "$STEAL" ]; then
+    echo "[+] CPU Steal Time: ${STEAL}%"
+
+    STEAL_INT=$(printf "%.0f" "$STEAL")
+
+    if [ "$STEAL_INT" -eq 0 ]; then
+        SCORE=$((SCORE+2))
+    fi
 fi
 
-#########################################
-# VMware
-#########################################
+# -----------------------------
+# CPU Information
+# -----------------------------
+CPU_MODEL=$(lscpu 2>/dev/null | grep "Model name" | cut -d: -f2)
 
-if echo "$PRODUCT_NAME" | grep -qi vmware; then
-    SERVER_TYPE="VPS"
-    VIRT_TYPE="VMware"
+echo "[+] CPU: $CPU_MODEL"
+
+if echo "$CPU_MODEL" | grep -qiE "Xeon|EPYC|Ryzen"; then
+    SCORE=$((SCORE+1))
 fi
 
-#########################################
-# OUTPUT
-#########################################
+# -----------------------------
+# Hypervisor Check
+# -----------------------------
+if command -v virt-what >/dev/null 2>&1; then
+    HV=$(virt-what | head -n1)
 
-title "RESULT"
+    if [ -n "$HV" ]; then
+        echo "[+] Hypervisor: $HV"
+    fi
+fi
 
-echo -e "${GREEN}Server Type:${NC}      $SERVER_TYPE"
+# -----------------------------
+# Final Classification
+# -----------------------------
+echo
+echo "========================================="
+echo "Analysis Score: $SCORE"
+echo "========================================="
+echo
 
-[ -n "$VIRT_TYPE" ] && \
-echo -e "${GREEN}Virtualization:${NC}   $VIRT_TYPE"
+if [ "$SCORE" -ge 4 ]; then
+    SERVER_TYPE="LIKELY VDS"
+else
+    SERVER_TYPE="LIKELY VPS"
+fi
 
-echo -e "${GREEN}Machine Type:${NC}     $MACHINE_TYPE"
-echo -e "${GREEN}Hypervisor:${NC}       $HYPERVISOR"
+echo "Detected Type : $SERVER_TYPE"
 
 echo
-title "HARDWARE"
-
-echo -e "${GREEN}CPU Cores:${NC}        $(nproc)"
-echo -e "${GREEN}RAM:${NC}              $(free -h | awk '/Mem:/ {print $2}')"
-echo -e "${GREEN}Disk:${NC}             $(df -h / | awk 'NR==2 {print $2}')"
-
-echo
-title "DMI INFORMATION"
-
-echo -e "${GREEN}Vendor:${NC}           $SYS_VENDOR"
-echo -e "${GREEN}Product:${NC}          $PRODUCT_NAME"
-echo -e "${GREEN}Board:${NC}            $BOARD_NAME"
+echo "Virtualization : $VIRT"
+echo "CPU Cores      : $(nproc)"
+echo "RAM            : $(free -h | awk '/Mem:/ {print $2}')"
+echo "Disk           : $(df -h / | awk 'NR==2 {print $2}')"
 
 echo
-title "VERDICT"
-
-case "$SERVER_TYPE" in
-
-    "VDS")
-        echo -e "${GREEN}✓ This server is detected as a VDS.${NC}"
-        ;;
-
-    "VPS")
-        echo -e "${YELLOW}✓ This server is detected as a VPS.${NC}"
-        ;;
-
-    "CONTAINER")
-        echo -e "${CYAN}✓ This server is running inside a Container.${NC}"
-        ;;
-
-    "BARE METAL")
-        echo -e "${GREEN}✓ This server is a Bare Metal / Dedicated Server.${NC}"
-        ;;
-
-    *)
-        echo -e "${RED}Unable to determine server type accurately.${NC}"
-        ;;
-esac
-
-line
+echo "NOTE:"
+echo "- VDS vs VPS cannot be determined with 100% certainty from inside Linux."
+echo "- Q35 is treated as a positive indicator for VDS."
+echo "- This result is an educated guess, not proof."
