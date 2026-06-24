@@ -100,6 +100,55 @@ install_fxtunnel() {
     
     if [ $? -eq 0 ]; then
         print_success "fxTunnel installed successfully!"
+        
+        # ╔══════════════════════════════════════════════════════════════╗
+        # ║     AUTO PATH SETUP - RUNS IMMEDIATELY AFTER INSTALL       ║
+        # ╚══════════════════════════════════════════════════════════════╝
+        
+        print_section "Configuring PATH Environment"
+        
+        # Add to root's .bashrc
+        print_info "Adding /root/.local/bin to PATH..."
+        if ! grep -q "/root/.local/bin" /root/.bashrc 2>/dev/null; then
+            echo 'export PATH=$PATH:/root/.local/bin' >> /root/.bashrc
+            print_success "Added to /root/.bashrc"
+        else
+            print_info "Already exists in /root/.bashrc"
+        fi
+        
+        # Also add to current user's .bashrc if running with sudo
+        if [ -n "$SUDO_USER" ]; then
+            USER_HOME=$(getent passwd "$SUDO_USER" | cut -d: -f6)
+            if [ -n "$USER_HOME" ] && [ -f "$USER_HOME/.bashrc" ]; then
+                if ! grep -q "/root/.local/bin" "$USER_HOME/.bashrc"; then
+                    echo 'export PATH=$PATH:/root/.local/bin' >> "$USER_HOME/.bashrc"
+                    print_success "Added to $USER_HOME/.bashrc"
+                fi
+            fi
+        fi
+        
+        # Source .bashrc to apply changes immediately
+        print_info "Applying PATH changes..."
+        source ~/.bashrc 2>/dev/null || true
+        export PATH=$PATH:/root/.local/bin
+        
+        print_success "PATH configured successfully!"
+        echo -e "${CYAN}Current PATH includes: ${YELLOW}/root/.local/bin${NC}"
+        
+        # Verify installation
+        echo ""
+        if command -v fxtunnel &> /dev/null; then
+            print_success "fxtunnel command is now ready to use!"
+            echo -e "${CYAN}Location: ${YELLOW}$(which fxtunnel)${NC}"
+        else
+            print_info "fxtunnel installed at: /root/.local/bin/fxtunnel"
+            print_info "PATH has been added to .bashrc"
+            print_info "Use command: source ~/.bashrc or re-login to use fxtunnel"
+        fi
+        
+        echo ""
+        print_success "Installation Complete! You can now use fxtunnel command."
+        
     else
         print_error "Failed to install fxTunnel"
         exit 1
