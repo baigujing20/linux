@@ -42,11 +42,6 @@ HOPINGBOYZ_BANNER="
 ╚══════════════════════════════════════════════════════════════╝
 "
 
-# Configuration directory
-CONFIG_DIR="/etc/fxtunnel"
-SERVICE_DIR="/etc/systemd/system"
-SCRIPT_DIR="/usr/local/bin"
-
 # Function to print banner
 print_banner() {
     echo -e "${CYAN}${HOPINGBOYZ_BANNER}${NC}"
@@ -244,7 +239,7 @@ After=network-online.target
 Type=simple
 User=root
 Environment="HOME=/root"
-ExecStart=/usr/local/bin/fxtunnel tcp $port -t $token
+ExecStart=/root/.local/bin/fxtunnel tcp $port -t $token
 Restart=always
 RestartSec=5
 
@@ -319,7 +314,7 @@ edit_service() {
     
     # Update service file
     service_file="$SERVICE_DIR/$selected_service.service"
-    sed -i "s|ExecStart=.*|ExecStart=/usr/local/bin/fxtunnel tcp $port -t $token|g" "$service_file"
+    sed -i "s|ExecStart=.*|ExecStart=/root/.local/bin/fxtunnel tcp $port -t $token|g" "$service_file"
     
     # Reload and start
     systemctl daemon-reload
@@ -629,7 +624,7 @@ After=network-online.target
 Type=simple
 User=root
 Environment="HOME=/root"
-ExecStart=/usr/local/bin/fxtunnel tcp $port -t $token
+ExecStart=/root/.local/bin/fxtunnel tcp $port -t $token
 Restart=always
 RestartSec=5
 
